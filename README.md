@@ -208,6 +208,7 @@ ai-job-search/
 │   ├── convert_salary_excel.py        # Convert salary Excel to JSON
 │   ├── lint_skills.py                 # CI lint for skills, commands, settings.json
 │   ├── security_guards.py             # CI guards: permission allowlist, gitignore rules, manifests
+│   ├── sort_files.py                  # Offline file sorter (by type, date, or extension; undoable)
 │   └── README_SALARY_TOOL.md          # Salary tool setup instructions
 ├── job_scraper/                       # Scraper state (seen jobs, results)
 ├── upskill/                           # /upskill report output (markdown reports per run)
@@ -302,6 +303,19 @@ For **country-agnostic** starting points outside Denmark, the repo ships two por
 ### Salary benchmarking
 
 The salary tool works with any salary data you provide (union statistics, Glassdoor exports, personal research, etc.). See `tools/README_SALARY_TOOL.md` for the expected format and setup. If you don't have salary data, the salary step is simply skipped.
+
+### Offline file sorter
+
+`tools/sort_files.py` tidies a messy folder (e.g. Downloads) into subfolders. It uses only the Python standard library and never touches the network. It shows a preview unless you pass `--apply`. It never overwrites files: a clash becomes `name (1).ext`. Every applied run writes an undo log.
+
+```
+python3 tools/sort_files.py ~/Downloads                     # preview: Documents/, Images/, Archives/, ...
+python3 tools/sort_files.py ~/Downloads --apply             # do it
+python3 tools/sort_files.py ~/Pictures --by date --apply    # 2024/2024-03/...
+python3 tools/sort_files.py ~/Downloads --undo ~/Downloads/.sort_files_log_<stamp>.json --apply
+```
+
+Other options: `--by extension`, `--recursive`, `--dest FOLDER`, `--copy`, `--include-hidden`. To change which extensions go where, edit the `CATEGORIES` table at the top of the script.
 
 ### Starting over
 
