@@ -208,7 +208,8 @@ ai-job-search/
 │   ├── convert_salary_excel.py        # Convert salary Excel to JSON
 │   ├── lint_skills.py                 # CI lint for skills, commands, settings.json
 │   ├── security_guards.py             # CI guards: permission allowlist, gitignore rules, manifests
-│   ├── sort_files.py                  # Offline file sorter (by type, date, or extension; undoable)
+│   ├── file_sorter_app.py             # Offline file sorter app (opens in your browser)
+│   ├── sort_files.py                  # File sorter engine + command line (smart, type, date, extension)
 │   └── README_SALARY_TOOL.md          # Salary tool setup instructions
 ├── job_scraper/                       # Scraper state (seen jobs, results)
 ├── upskill/                           # /upskill report output (markdown reports per run)
@@ -306,16 +307,28 @@ The salary tool works with any salary data you provide (union statistics, Glassd
 
 ### Offline file sorter
 
-`tools/sort_files.py` tidies a messy folder (e.g. Downloads) into subfolders. It uses only the Python standard library and never touches the network. It shows a preview unless you pass `--apply`. It never overwrites files: a clash becomes `name (1).ext`. Every applied run writes an undo log.
+A point-and-click tool that tidies a messy folder (e.g. Downloads) into subfolders. It needs nothing beyond Python and never connects to the internet.
+
+**Open it:** double-click `tools/File Sorter.command` (macOS) or `tools/File Sorter.bat` (Windows), or run `python3 tools/file_sorter_app.py`. It opens as a page in your browser. The page is served only from your own computer, and the link includes a private key so other websites can't use it.
+
+**Use it:** pick a folder, press **Scan**, check where each file is going, then press **Sort**.
+
+- **Smart sorting (default)** groups files by topic: Job Applications, Finance, Contracts & Legal, Travel & Tickets, Certificates & Diplomas, Manuals & Guides. It decides from the file name and, for PDF, Word, Excel, PowerPoint and text files, the text inside. Everything else is grouped by kind: Photos, Screenshots, Images, Documents, Archives, Installers and so on. Each file shows *why* it was placed where it was. English and Danish keywords are recognised.
+- **Change anything before sorting:** pick another folder per file, create a new folder, choose *Leave where it is*, or filter the list and move a whole group at once.
+- **Duplicates:** exact copies can go to a `Duplicates` folder. The oldest copy is kept as the original.
+- **Safety:** nothing moves until you press Sort, existing files are never overwritten (a clash becomes `name (1).ext`), and every sort can be undone from **History**.
+- **Other ways to sort:** by file type, by month (`2024/2024-03`) or by extension.
+
+The same sorter also runs from the command line:
 
 ```
-python3 tools/sort_files.py ~/Downloads                     # preview: Documents/, Images/, Archives/, ...
-python3 tools/sort_files.py ~/Downloads --apply             # do it
+python3 tools/sort_files.py ~/Downloads                     # preview
+python3 tools/sort_files.py ~/Downloads --duplicates --apply
 python3 tools/sort_files.py ~/Pictures --by date --apply    # 2024/2024-03/...
 python3 tools/sort_files.py ~/Downloads --undo ~/Downloads/.sort_files_log_<stamp>.json --apply
 ```
 
-Other options: `--by extension`, `--recursive`, `--dest FOLDER`, `--copy`, `--include-hidden`. To change which extensions go where, edit the `CATEGORIES` table at the top of the script.
+To change the topics or keywords, edit the `SMART_TOPICS` and `CATEGORIES` tables at the top of `tools/sort_files.py`.
 
 ### Starting over
 

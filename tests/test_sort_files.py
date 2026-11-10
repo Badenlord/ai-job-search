@@ -3,6 +3,8 @@ import json
 import os
 import tempfile
 import unittest
+import zipfile
+import zlib
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
@@ -62,7 +64,8 @@ class SortTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("Preview only", out)
-        self.assertIn("Documents/", out)
+        self.assertIn("Job Applications/", out)
+        self.assertIn('name mentions "cv"', out)
         self.assertEqual(
             sorted(p.name for p in self.inbox.iterdir()), ["cv.pdf", "photo.jpg"]
         )
@@ -77,7 +80,7 @@ class SortTests(unittest.TestCase):
         make(self.inbox / "Thumbs.db")
         make(self.inbox / "existing_folder" / "inner.pdf")
 
-        code, out, _ = run(self.inbox, "--apply")
+        code, out, _ = run(self.inbox, "--by", "type", "--apply")
 
         self.assertEqual(code, 0, out)
         self.assertTrue((self.inbox / "Documents" / "cv.pdf").is_file())
@@ -97,7 +100,7 @@ class SortTests(unittest.TestCase):
         make(self.inbox / "Documents" / "cv.pdf", "old")
         make(self.inbox / "cv.pdf", "new")
 
-        code, out, _ = run(self.inbox, "--apply")
+        code, out, _ = run(self.inbox, "--by", "type", "--apply")
 
         self.assertEqual(code, 0)
         self.assertEqual((self.inbox / "Documents" / "cv.pdf").read_text(), "old")
@@ -151,7 +154,7 @@ class SortTests(unittest.TestCase):
         make(self.inbox / "cv.pdf")
         sorted_dir = self.root / "sorted"
 
-        code, out, _ = run(self.inbox, "--dest", sorted_dir, "--copy", "--apply")
+        code, out, _ = run(self.inbox, "--by", "type", "--dest", sorted_dir, "--copy", "--apply")
 
         self.assertEqual(code, 0, out)
         self.assertTrue((self.inbox / "cv.pdf").is_file())
@@ -162,7 +165,7 @@ class SortTests(unittest.TestCase):
     def test_undo_restores_files_and_removes_empty_folders(self):
         make(self.inbox / "cv.pdf", "cv")
         make(self.inbox / "photo.jpg", "img")
-        run(self.inbox, "--apply")
+        run(self.inbox, "--by", "type", "--apply")
         log = find_log(self.inbox)
 
         code, out, _ = run("--undo", log)
@@ -180,7 +183,7 @@ class SortTests(unittest.TestCase):
 
     def test_undo_refuses_to_overwrite_a_new_file_in_the_original_spot(self):
         make(self.inbox / "cv.pdf", "sorted")
-        run(self.inbox, "--apply")
+        run(self.inbox, "--by", "type", "--apply")
         make(self.inbox / "cv.pdf", "newer")
 
         code, _, err = run("--undo", find_log(self.inbox), "--apply")
@@ -210,6 +213,112 @@ class SortTests(unittest.TestCase):
 
         self.assertEqual(code, 2)
         self.assertIn("not a folder", err)
+
+
+def minimal_pdf(text):
+    stream = zlib.compress(b"BT (" + text.encode("latin-1") + b") Tj ET")
+    return (
+        b"%PDF-1.4\n1 0 obj<</Length " + str(len(stream)).encode()
+        + b"/Filter/FlateDecode>>stream\n" + stream + b"\nendstream\nendobj\n%%EOF"
+    )
+
+
+class SmartModeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name).resolve()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def classify(self, name, data=b""):
+        path = self.root / name
+        path.write_bytes(data)
+        return sort_files.smart_classify(path)
+
+    def test_topics_from_file_names_in_english_and_danish(self):
+        cases = {
+            "Jane_Doe_Resume.docx": "Job Applications",
+            "CoverLetter_Acme.pdf": "Job Applications",
+            "R\u00e9sum\u00e9.pdf": "Job Applications",
+            "Faktura_2024-03.pdf": "Finance",
+            "receipts-march.pdf": "Finance",
+            "receipt.jpg": "Finance",
+            "Lejekontrakt.pdf": "Contracts & Legal",
+            "boarding-pass-CPH.pdf": "Travel & Tickets",
+            "Eksamensbevis.pdf": "Certificates & Diplomas",
+            "dishwasher manual.pdf": "Manuals & Guides",
+        }
+        for name, folder in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(self.classify(name)[0], folder)
+
+    def test_short_keywords_only_match_whole_words(self):
+        self.assertEqual(self.classify("taxi-photo-booth.pdf")[0], "Documents")
+        self.assertEqual(self.classify("cvs-pharmacy.pdf")[0], "Documents")
+
+    def test_images_split_into_screenshots_photos_and_other_images(self):
+        self.assertEqual(self.classify("Sk\u00e6rmbillede 2024-03-15 kl. 10.22.31.png")[0], "Screenshots")
+        self.assertEqual(self.classify("Screenshot 2024-01-02 at 09.00.00.png")[0], "Screenshots")
+        self.assertEqual(self.classify("IMG_0412.HEIC")[0], "Photos")
+        self.assertEqual(self.classify("20240315_123456.jpg")[0], "Photos")
+        self.assertEqual(self.classify("logo.svg")[0], "Images")
+
+    def test_non_documents_fall_back_to_their_kind(self):
+        self.assertEqual(self.classify("song.mp3"), ("Audio", "MP3 file"))
+        self.assertEqual(self.classify("budget.mp3")[0], "Audio")  # topics are for documents
+        self.assertEqual(self.classify("README"), ("Other", "no file extension"))
+
+    def test_topics_from_plain_text_content(self):
+        folder, reason = self.classify(
+            "scan001.txt", b"Invoice number 4411\nSubtotal 100\nVAT 25\nAmount due 125"
+        )
+        self.assertEqual(folder, "Finance")
+        self.assertIn("document mentions", reason)
+
+    def test_topics_from_docx_content(self):
+        path = self.root / "draft.docx"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(
+                "word/document.xml",
+                "<w:document><w:body><w:p><w:r><w:t>Curriculum Vitae</w:t></w:r></w:p>"
+                "<w:p><w:r><w:t>Work experience</w:t></w:r></w:p></w:body></w:document>",
+            )
+        self.assertEqual(sort_files.smart_classify(path)[0], "Job Applications")
+
+    def test_topics_from_pdf_content(self):
+        pdf = minimal_pdf("This Agreement is made between the parties. Governing law: Denmark")
+        self.assertEqual(self.classify("document(3).pdf", pdf)[0], "Contracts & Legal")
+
+    def test_a_single_content_keyword_is_not_enough(self):
+        self.assertEqual(self.classify("notes.txt", b"Remember the invoice.")[0], "Documents")
+
+    def test_unreadable_documents_fall_back_quietly(self):
+        self.assertEqual(self.classify("broken.docx", b"not a zip")[0], "Documents")
+        self.assertEqual(self.classify("broken.pdf", b"%PDF-1.4 stream\n\xff\xfe")[0], "Documents")
+
+    def test_duplicates_keep_the_oldest_copy_in_place(self):
+        inbox = self.root / "inbox"
+        older = make(inbox / "report.pdf", "same")
+        newer = make(inbox / "report (1).pdf", "same")
+        make(inbox / "other.pdf", "different")
+        os.utime(older, (1_000_000, 1_000_000))
+        os.utime(newer, (2_000_000, 2_000_000))
+
+        code, out, _ = run(inbox, "--duplicates", "--apply")
+
+        self.assertEqual(code, 0, out)
+        self.assertTrue((inbox / "Duplicates" / "report (1).pdf").is_file())
+        self.assertTrue((inbox / "Documents" / "report.pdf").is_file())
+        self.assertTrue((inbox / "Documents" / "other.pdf").is_file())
+
+    def test_safe_folder_rejects_names_that_could_escape_or_break(self):
+        for bad in ("", "..", "../escape", "/abs", "a\\b", "CON", "trailing.", "a/./b", "x" * 200):
+            with self.subTest(bad=bad):
+                with self.assertRaises(sort_files.SortError):
+                    sort_files.safe_folder(bad)
+        self.assertEqual(sort_files.safe_folder(" Finance "), Path("Finance"))
+        self.assertEqual(sort_files.safe_folder("2024/2024-03"), Path("2024", "2024-03"))
 
 
 if __name__ == "__main__":
